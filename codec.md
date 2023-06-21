@@ -1,0 +1,16 @@
+- Serialzer/Deserializer:
+	- analogs of serde::{Serialize,Deserialize}
+	- Serialize accepts a Serializer
+	- Deserialize accepts a Deserializer
+- Encoder/Decoder:
+	- analogs of serde::{Serializer,Deserializer}
+	- Decoder uses a Visitor to drive deserialization
+- Visitor:
+	- analog of serde::de::Visitor
+
+- Open questions:
+    - how to allow formats to special-case based on destination type?
+        - formats only see the visitor, not the actual destination
+        - could add a Type() method or something on visitor s.t. the format can see the type
+    - how to allow formats to special-case based on struct fields?
+        - this seems clearer: first-class struct decoding/encoding
