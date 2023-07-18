@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"fmt"
 	"unsafe"
 
 	"golang.org/x/exp/constraints"
@@ -35,10 +36,15 @@ func (SkipCodec) VisitFloat64(v float64) error       { return nil }
 func (SkipCodec) VisitComplex64(v complex64) error   { return nil }
 func (SkipCodec) VisitComplex128(v complex128) error { return nil }
 func (SkipCodec) VisitString(v string) error         { return nil }
+func (SkipCodec) VisitBytes(v []byte) error          { return nil }
+
+func (SkipCodec) VisitElem(d ElemDecoder) error {
+	return d.Element(nil, SkipCodec{})
+}
 
 func (SkipCodec) VisitSeq(d SeqDecoder) error {
 	for {
-		ok, err := d.NextElement(SkipCodec{})
+		ok, err := d.NextElement(nil, SkipCodec{})
 		if err != nil {
 			return err
 		}
@@ -50,14 +56,14 @@ func (SkipCodec) VisitSeq(d SeqDecoder) error {
 
 func (SkipCodec) VisitMap(d MapDecoder) error {
 	for {
-		ok, err := d.NextKey(SkipCodec{})
+		ok, err := d.NextKey(nil, SkipCodec{})
 		if err != nil {
 			return err
 		}
 		if !ok {
 			return nil
 		}
-		if err := d.NextValue(SkipCodec{}); err != nil {
+		if err := d.NextValue(nil, SkipCodec{}); err != nil {
 			return err
 		}
 	}
@@ -173,6 +179,15 @@ func (c AnyCodec) VisitString(v string) error {
 	return nil
 }
 
+func (c AnyCodec) VisitBytes(v []byte) error {
+	*c.value = v
+	return nil
+}
+
+func (c AnyCodec) VisitElem(elem ElemDecoder) error {
+	return elem.Element(c.value, c)
+}
+
 func (c AnyCodec) VisitSeq(seq SeqDecoder) error {
 	var vals []any
 	if len, ok := seq.Size(); ok {
@@ -180,7 +195,7 @@ func (c AnyCodec) VisitSeq(seq SeqDecoder) error {
 	}
 	for {
 		var v any
-		ok, err := seq.NextElement(AnyCodec{value: &v})
+		ok, err := seq.NextElement(&v, AnyCodec{value: &v})
 		if err != nil {
 			return err
 		}
@@ -201,7 +216,7 @@ func (c AnyCodec) VisitMap(map_ MapDecoder) error {
 	}
 	for {
 		var k string
-		ok, err := map_.NextKey(NewString(&k))
+		ok, err := map_.NextKey(&k, NewString(&k))
 		if err != nil {
 			return err
 		}
@@ -211,7 +226,7 @@ func (c AnyCodec) VisitMap(map_ MapDecoder) error {
 		}
 
 		var v any
-		if err = map_.NextValue(AnyCodec{value: &v}); err != nil {
+		if err = map_.NextValue(&v, AnyCodec{value: &v}); err != nil {
 			return err
 		}
 		m[k] = v
@@ -688,6 +703,7 @@ func (c StringCodec[T]) Serialize(e Encoder) error {
 }
 
 type PtrCodec[P ~*T, T any, C Codec[T]] struct {
+	DefaultVisitor
 	value *P
 }
 
@@ -709,179 +725,17 @@ func (c PtrCodec[P, T, C]) VisitNil() error {
 	return nil
 }
 
-func (c PtrCodec[P, T, C]) VisitBool(dv bool) error {
+func (c PtrCodec[P, T, C]) VisitElem(d ElemDecoder) error {
 	var v T
-	if err := c.codec(&v).VisitBool(dv); err != nil {
+	if err := d.Element(P(&v), c.codec(&v)); err != nil {
 		return err
 	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitInt(dv int) error {
-	var v T
-	if err := c.codec(&v).VisitInt(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitInt8(dv int8) error {
-	var v T
-	if err := c.codec(&v).VisitInt8(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitInt16(dv int16) error {
-	var v T
-	if err := c.codec(&v).VisitInt16(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitInt32(dv int32) error {
-	var v T
-	if err := c.codec(&v).VisitInt32(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitInt64(dv int64) error {
-	var v T
-	if err := c.codec(&v).VisitInt64(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitUint(dv uint) error {
-	var v T
-	if err := c.codec(&v).VisitUint(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitUint8(dv uint8) error {
-	var v T
-	if err := c.codec(&v).VisitUint8(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitUint16(dv uint16) error {
-	var v T
-	if err := c.codec(&v).VisitUint16(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitUint32(dv uint32) error {
-	var v T
-	if err := c.codec(&v).VisitUint32(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitUint64(dv uint64) error {
-	var v T
-	if err := c.codec(&v).VisitUint64(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitUintptr(dv uintptr) error {
-	var v T
-	if err := c.codec(&v).VisitUintptr(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitFloat32(dv float32) error {
-	var v T
-	if err := c.codec(&v).VisitFloat32(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitFloat64(dv float64) error {
-	var v T
-	if err := c.codec(&v).VisitFloat64(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitComplex64(dv complex64) error {
-	var v T
-	if err := c.codec(&v).VisitComplex64(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitComplex128(dv complex128) error {
-	var v T
-	if err := c.codec(&v).VisitComplex128(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitString(dv string) error {
-	var v T
-	if err := c.codec(&v).VisitString(dv); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitSeq(d SeqDecoder) error {
-	var v T
-	if err := c.codec(&v).VisitSeq(d); err != nil {
-		return err
-	}
-	*c.value = &v
-	return nil
-}
-
-func (c PtrCodec[P, T, C]) VisitMap(d MapDecoder) error {
-	var v T
-	if err := c.codec(&v).VisitMap(d); err != nil {
-		return err
-	}
-	*c.value = &v
+	*c.value = P(&v)
 	return nil
 }
 
 func (c PtrCodec[P, T, C]) Deserialize(d Decoder) error {
-	return d.DecodeOption(c)
+	return d.DecodePtr(c)
 }
 
 func (c PtrCodec[P, T, C]) Serialize(e Encoder) error {
@@ -900,8 +754,8 @@ func NewSeq[C Codec[T], Q ~[]T, T any](v *Q) SeqCodec[Q, T, C] {
 	return SeqCodec[Q, T, C]{value: v}
 }
 
-func (c SeqCodec[Q, T, C]) InitCodec(v *Q) {
-	c.value = v
+func (c SeqCodec[Q, T, C]) New(v *Q) Codec[Q] {
+	return NewSeq[C](v)
 }
 
 func (c SeqCodec[Q, T, C]) VisitNil() error {
@@ -917,7 +771,7 @@ func (c SeqCodec[Q, T, C]) VisitSeq(seq SeqDecoder) error {
 	var codec C
 	for {
 		var v T
-		ok, err := seq.NextElement(codec.New(&v))
+		ok, err := seq.NextElement(&v, codec.New(&v))
 		if err != nil {
 			return err
 		}
@@ -942,7 +796,7 @@ func (c SeqCodec[Q, T, C]) Serialize(e Encoder) error {
 	}
 	var codec C
 	for _, v := range vals {
-		if err := enc.EncodeElement(codec.New(&v)); err != nil {
+		if err := enc.EncodeElement(v, codec.New(&v)); err != nil {
 			return err
 		}
 	}
@@ -956,6 +810,10 @@ type MapCodec[M ~map[K]V, K constraints.Ordered, V any, CK Codec[K], CV Codec[V]
 
 func NewMap[CK Codec[K], CV Codec[V], M ~map[K]V, K constraints.Ordered, V any](v *M) MapCodec[M, K, V, CK, CV] {
 	return MapCodec[M, K, V, CK, CV]{value: v}
+}
+
+func (c MapCodec[M, K, V, CK, CV]) New(v *M) Codec[M] {
+	return NewMap[CK, CV](v)
 }
 
 func (c MapCodec[M, K, V, CK, CV]) VisitNil() error {
@@ -974,7 +832,7 @@ func (c MapCodec[M, K, V, CK, CV]) VisitMap(map_ MapDecoder) error {
 	var valueCodec CV
 	for {
 		var k K
-		ok, err := map_.NextKey(keyCodec.New(&k))
+		ok, err := map_.NextKey(&k, keyCodec.New(&k))
 		if err != nil {
 			return err
 		}
@@ -984,7 +842,7 @@ func (c MapCodec[M, K, V, CK, CV]) VisitMap(map_ MapDecoder) error {
 		}
 
 		var v V
-		if err = map_.NextValue(valueCodec.New(&v)); err != nil {
+		if err = map_.NextValue(&v, valueCodec.New(&v)); err != nil {
 			return err
 		}
 		m[k] = v
@@ -1011,13 +869,35 @@ func (c MapCodec[M, K, V, CK, CV]) Serialize(e Encoder) error {
 	var keyCodec CK
 	var valueCodec CV
 	for _, k := range keys {
-		if err := enc.EncodeKey(keyCodec.New(&k)); err != nil {
+		if err := enc.EncodeKey(k, keyCodec.New(&k)); err != nil {
 			return err
 		}
 		v := m[k]
-		if err := enc.EncodeValue(valueCodec.New(&v)); err != nil {
+		if err := enc.EncodeValue(v, valueCodec.New(&v)); err != nil {
 			return err
 		}
 	}
 	return enc.Close()
+}
+
+type ErrorCodec[T any] struct {
+	DefaultVisitor
+}
+
+func NewError[T any](v *T) ErrorCodec[T] {
+	return ErrorCodec[T]{}
+}
+
+func (c ErrorCodec[T]) New(v *T) Codec[T] {
+	return c
+}
+
+func (c ErrorCodec[T]) Deserialize(d Decoder) error {
+	var t T
+	return fmt.Errorf("cannot deserialize %T", t)
+}
+
+func (c ErrorCodec[T]) Serialize(e Encoder) error {
+	var t T
+	return fmt.Errorf("cannot serialize %T", t)
 }

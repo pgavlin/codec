@@ -1,12 +1,14 @@
 package json
 
 import (
+	"encoding"
 	"math"
 	"reflect"
 	"strconv"
 	"unsafe"
 
 	"github.com/pgavlin/codec"
+	"github.com/segmentio/asm/base64"
 )
 
 func (d decoder) decodeNull(b []byte, cv codec.Visitor) ([]byte, error) {
@@ -39,8 +41,6 @@ func (d decoder) decodeFalse(b []byte, cv codec.Visitor) ([]byte, error) {
 	return b, syntaxError(b, "expected 'false' but found invalid token")
 }
 
-var uint64Type = reflect.TypeOf((*uint64)(nil)).Elem()
-
 // convUint converts an already-parsed number into a uint64.
 func convUint(b []byte) (uint64, error) {
 	if len(b) == 1 && b[0] == '0' {
@@ -58,8 +58,6 @@ func convUint(b []byte) (uint64, error) {
 	}
 	return value, nil
 }
-
-var int64Type = reflect.TypeOf((*int64)(nil)).Elem()
 
 // convInt converts an already-parsed number into an int64.
 func convInt(b []byte) (int64, error) {
@@ -151,6 +149,15 @@ func (d decoder) decodeString(b []byte, cv codec.Visitor) ([]byte, error) {
 	return r, cv.VisitString(str)
 }
 
+func (d decoder) decodePtr(b []byte, cv codec.Visitor) ([]byte, error) {
+	if hasNullPrefix(b) {
+		return b[4:], cv.VisitNil()
+	}
+	dec := ElemDecoder{rest: b, flags: d.flags}
+	err := cv.VisitElem(&dec)
+	return dec.rest, err
+}
+
 func (d decoder) decodeObject(b []byte, cv codec.Visitor) ([]byte, error) {
 	if len(b) < 2 {
 		return b[len(b):], unexpectedEOF(b)
@@ -206,6 +213,116 @@ func (d decoder) decodeValue(b []byte, cv codec.Visitor) ([]byte, error) {
 	return b, err
 }
 
+func (d decoder) decodeBytes(b []byte, cv codec.Visitor) ([]byte, error) {
+	if hasNullPrefix(b) {
+		return b[4:], cv.VisitNil()
+	}
+
+	if len(b) < 2 {
+		return d.inputError(b, bytesType)
+	}
+
+	if b[0] != '"' {
+		// Go 1.7- behavior: bytes slices may be decoded from array of integers.
+		if len(b) > 0 && b[0] == '[' {
+			var bytes []byte
+			r, err := d.decodeArray(b, codec.NewSeq[codec.Uint8Codec[byte]](&bytes))
+			if err != nil {
+				return r, err
+			}
+			return r, cv.VisitBytes(bytes)
+		}
+		return d.inputError(b, bytesType)
+	}
+
+	// The input string contains escaped sequences, we need to parse it before
+	// decoding it to match the encoding/json package behvaior.
+	src, r, _, err := d.parseStringUnquote(b, nil)
+	if err != nil {
+		return d.inputError(b, bytesType)
+	}
+
+	dst := make([]byte, base64.StdEncoding.DecodedLen(len(src)))
+
+	n, err := base64.StdEncoding.Decode(dst, src)
+	if err != nil {
+		return r, err
+	}
+
+	return r, cv.VisitBytes(dst[:n])
+}
+
+func (d decoder) decodeJSONUnmarshaler(b []byte, v any) ([]byte, error) {
+	j, b, _, err := d.parseValue(b)
+	if err != nil {
+		return b, err
+	}
+
+	u := reflect.ValueOf(v)
+	if u.IsNil() {
+		u.Set(reflect.New(u.Type().Elem()))
+	}
+
+	return b, v.(Unmarshaler).UnmarshalJSON(j)
+}
+
+func (d decoder) decodeTextUnmarshaler(b []byte, v any) ([]byte, error) {
+	j, b, k, err := d.parseValue(b)
+	if err != nil {
+		return b, err
+	}
+	if len(j) == 0 {
+		return d.inputError(b, reflect.TypeOf(v))
+	}
+
+	var value string
+	switch k.Class() {
+	case Null:
+		return b, nil
+
+	case String:
+		s, _, _, err := d.parseStringUnquote(j, nil)
+		if err != nil {
+			return b, err
+		}
+		u := reflect.ValueOf(v)
+		if u.IsNil() {
+			u.Set(reflect.New(u.Type().Elem()))
+		}
+		return b, v.(encoding.TextUnmarshaler).UnmarshalText(s)
+
+	case Bool:
+		if k == True {
+			value = "true"
+		} else {
+			value = "false"
+		}
+
+	case Num:
+		value = "number"
+
+	case Object:
+		value = "object"
+
+	case Array:
+		value = "array"
+	}
+
+	return b, &UnmarshalTypeError{Value: value, Type: reflect.TypeOf(v)}
+}
+
+type ElemDecoder struct {
+	rest  []byte
+	flags ParseFlags
+}
+
+func (d *ElemDecoder) Element(v any, ds codec.Deserializer) error {
+	dec := Decoder{rest: d.rest, flags: d.flags}
+	err := dec.decode(v, ds)
+	d.rest = dec.rest
+	return err
+}
+
 type SeqDecoder struct {
 	first bool
 	rest  []byte
@@ -216,7 +333,7 @@ func (d *SeqDecoder) Size() (int, bool) {
 	return 0, false
 }
 
-func (d *SeqDecoder) NextElement(ds codec.Deserializer) (bool, error) {
+func (d *SeqDecoder) NextElement(v any, ds codec.Deserializer) (bool, error) {
 	b := skipSpaces(d.rest)
 
 	if len(b) == 0 {
@@ -252,7 +369,7 @@ func (d *SeqDecoder) NextElement(ds codec.Deserializer) (bool, error) {
 	}
 
 	dec := Decoder{rest: b, flags: d.flags}
-	err := ds.Deserialize(&dec)
+	err := dec.decode(v, ds)
 	d.rest = dec.rest
 	return err == nil, err
 }
@@ -267,7 +384,7 @@ func (d *MapDecoder) Size() (int, bool) {
 	return 0, false
 }
 
-func (d *MapDecoder) NextKey(ds codec.Deserializer) (bool, error) {
+func (d *MapDecoder) NextKey(k any, ds codec.Deserializer) (bool, error) {
 	b := skipSpaces(d.rest)
 
 	if len(b) == 0 {
@@ -302,13 +419,13 @@ func (d *MapDecoder) NextKey(ds codec.Deserializer) (bool, error) {
 		d.first = false
 	}
 
-	dec := Decoder{rest: b, flags: d.flags}
-	err := ds.Deserialize(&dec)
-	d.rest = dec.rest
+	dec := mapKeyDecoder{dec: &Decoder{rest: b, flags: d.flags}}
+	err := dec.decode(k, ds)
+	d.rest = dec.dec.rest
 	return err == nil, err
 }
 
-func (d *MapDecoder) NextValue(ds codec.Deserializer) error {
+func (d *MapDecoder) NextValue(v any, ds codec.Deserializer) error {
 	b := d.rest
 	if len(b) == 0 {
 		d.rest = b
@@ -321,7 +438,7 @@ func (d *MapDecoder) NextValue(ds codec.Deserializer) error {
 	b = skipSpaces(b[1:])
 
 	dec := Decoder{rest: b, flags: d.flags}
-	err := ds.Deserialize(&dec)
+	err := dec.decode(v, ds)
 	d.rest = dec.rest
 	return err
 }
@@ -329,6 +446,15 @@ func (d *MapDecoder) NextValue(ds codec.Deserializer) error {
 type Decoder struct {
 	rest  []byte
 	flags ParseFlags
+}
+
+func (d *Decoder) decode(v any, ds codec.Deserializer) (err error) {
+	codec := getCodec(v)
+	if codec.decode != nil {
+		d.rest, err = codec.decode(decoder{flags: d.flags}, d.rest, v)
+		return
+	}
+	return ds.Deserialize(d)
 }
 
 func (d *Decoder) DecodeAny(v codec.Visitor) (err error) {
@@ -409,12 +535,16 @@ func (d *Decoder) DecodeString(v codec.Visitor) error {
 	return d.DecodeAny(v)
 }
 
-func (d *Decoder) DecodeBytes(v codec.Visitor) error {
-	return d.DecodeAny(v)
+func (d *Decoder) DecodeBytes(v codec.Visitor) (err error) {
+	dec := decoder{flags: d.flags}
+	d.rest, err = dec.decodeBytes(d.rest, v)
+	return
 }
 
-func (d *Decoder) DecodeOption(v codec.Visitor) error {
-	return d.DecodeAny(v)
+func (d *Decoder) DecodePtr(v codec.Visitor) (err error) {
+	dec := decoder{flags: d.flags}
+	d.rest, err = dec.decodePtr(d.rest, v)
+	return
 }
 
 func (d *Decoder) DecodeSeq(v codec.Visitor) error {

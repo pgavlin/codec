@@ -1,6 +1,8 @@
 package codec
 
-import "errors"
+import (
+	"errors"
+)
 
 type Visitor interface {
 	VisitNil() error
@@ -21,19 +23,9 @@ type Visitor interface {
 	VisitComplex64(v complex64) error
 	VisitComplex128(v complex128) error
 	VisitString(v string) error
+	VisitBytes(v []byte) error
 	VisitSeq(d SeqDecoder) error
 	VisitMap(d MapDecoder) error
-}
-
-type SeqDecoder interface {
-	Size() (int, bool)
-	NextElement(d Deserializer) (bool, error)
-}
-
-type MapDecoder interface {
-	Size() (int, bool)
-	NextKey(d Deserializer) (bool, error)
-	NextValue(d Deserializer) error
 }
 
 type Decoder interface {
@@ -56,12 +48,21 @@ type Decoder interface {
 	DecodeComplex128(v Visitor) error
 	DecodeString(v Visitor) error
 	DecodeBytes(v Visitor) error
-
-	DecodeAny(v Visitor) error
-	DecodeOption(v Visitor) error
 	DecodeSeq(v Visitor) error
 	DecodeMap(v Visitor) error
 	DecodeStruct(name string, v Visitor) error
+	DecodeAny(v Visitor) error
+}
+
+type SeqDecoder interface {
+	Size() (int, bool)
+	NextElement(de Deserializer) (bool, error)
+}
+
+type MapDecoder interface {
+	Size() (int, bool)
+	NextKey(de Deserializer) (bool, error)
+	NextValue(de Deserializer) error
 }
 
 type Deserializer interface {
@@ -140,6 +141,10 @@ func (DefaultVisitor) VisitComplex128(v complex128) error {
 
 func (DefaultVisitor) VisitString(v string) error {
 	return errors.New("unexpected string")
+}
+
+func (DefaultVisitor) VisitBytes(v []byte) error {
+	return errors.New("unexpected bytes")
 }
 
 func (DefaultVisitor) VisitSeq(d SeqDecoder) error {

@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -8,9 +9,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func unmarshalAny(data reflect.Value, v any) error {
+	return testData{data}.decode(v, GetDeserializer(v))
+}
+
 type testData struct {
 	v reflect.Value
 }
+
+type testMarshaler interface {
+	MarshalAny() (reflect.Value, error)
+}
+
+type testUnmarshaler interface {
+	UnmarshalAny(reflect.Value) error
+}
+
+type testSpecial chan bool
 
 func data(v any) testData {
 	return testData{reflect.ValueOf(v)}
@@ -87,10 +102,39 @@ func (d testData) DecodeComplex64(v Visitor) error           { return d.DecodeAn
 func (d testData) DecodeComplex128(v Visitor) error          { return d.DecodeAny(v) }
 func (d testData) DecodeString(v Visitor) error              { return d.DecodeAny(v) }
 func (d testData) DecodeBytes(v Visitor) error               { return d.DecodeAny(v) }
-func (d testData) DecodeOption(v Visitor) error              { return d.DecodeAny(v) }
 func (d testData) DecodeSeq(v Visitor) error                 { return d.DecodeAny(v) }
 func (d testData) DecodeMap(v Visitor) error                 { return d.DecodeAny(v) }
 func (d testData) DecodeStruct(name string, v Visitor) error { return d.DecodeAny(v) }
+
+func (d testData) DecodePtr(v Visitor) error {
+	if d.v.Kind() == reflect.Pointer && d.v.IsNil() {
+		return v.VisitNil()
+	}
+	return v.VisitElem(testElemDecoder{d})
+}
+
+func (d testData) decode(v any, ds Deserializer) error {
+	switch v := v.(type) {
+	case *testSpecial:
+		special, ok := d.v.Interface().(testSpecial)
+		if !ok {
+			return fmt.Errorf("cannot unmarshal %T into testSpecial", d.v.Interface())
+		}
+		*v = special
+		return nil
+	case testUnmarshaler:
+		return v.UnmarshalAny(d.v)
+	}
+	return ds.Deserialize(d)
+}
+
+type testElemDecoder struct {
+	td testData
+}
+
+func (d testElemDecoder) Element(v any, ds Deserializer) error {
+	return d.td.decode(v, ds)
+}
 
 type testSeqDecoder struct {
 	seq reflect.Value
@@ -102,13 +146,14 @@ func (d *testSeqDecoder) Size() (int, bool) {
 	return d.len, true
 }
 
-func (d *testSeqDecoder) NextElement(ds Deserializer) (bool, error) {
+func (d *testSeqDecoder) NextElement(v any, ds Deserializer) (bool, error) {
 	if d.i == d.len {
 		return false, nil
 	}
-	v := d.seq.Index(d.i)
+	td := testData{d.seq.Index(d.i)}
 	d.i++
-	return true, ds.Deserialize(testData{v})
+
+	return true, td.decode(v, ds)
 }
 
 type testMapDecoder struct {
@@ -119,14 +164,15 @@ func (d *testMapDecoder) Size() (int, bool) {
 	return 0, false
 }
 
-func (d *testMapDecoder) NextKey(ds Deserializer) (bool, error) {
+func (d *testMapDecoder) NextKey(v any, ds Deserializer) (bool, error) {
 	if !d.iter.Next() {
 		return false, nil
 	}
-	return true, ds.Deserialize(testData{d.iter.Key()})
+	td := testData{d.iter.Key()}
+	return true, td.decode(v, ds)
 }
 
-func (d *testMapDecoder) NextValue(ds Deserializer) error {
+func (d *testMapDecoder) NextValue(v any, ds Deserializer) error {
 	return ds.Deserialize(testData{d.iter.Value()})
 }
 
@@ -140,7 +186,7 @@ func (d *testStructDecoder) Size() (int, bool) {
 	return 0, false
 }
 
-func (d *testStructDecoder) NextKey(ds Deserializer) (bool, error) {
+func (d *testStructDecoder) NextKey(v any, ds Deserializer) (bool, error) {
 	for {
 		if d.i == len(d.fields) {
 			return false, nil
@@ -148,13 +194,26 @@ func (d *testStructDecoder) NextKey(ds Deserializer) (bool, error) {
 		f := &d.fields[d.i]
 		d.i++
 		if !f.Anonymous {
-			return true, ds.Deserialize(testData{reflect.ValueOf(f.Name)})
+			td := testData{reflect.ValueOf(f.Name)}
+			return true, td.decode(v, ds)
 		}
 	}
 }
 
-func (d *testStructDecoder) NextValue(ds Deserializer) error {
-	return ds.Deserialize(testData{d.struct_.FieldByIndex(d.fields[d.i-1].Index)})
+func (d *testStructDecoder) NextValue(v any, ds Deserializer) error {
+	td := testData{d.struct_.FieldByIndex(d.fields[d.i-1].Index)}
+	return td.decode(v, ds)
+}
+
+type myString string
+
+func (s myString) MarshalAny() (reflect.Value, error) {
+	return reflect.ValueOf("marshaled"), nil
+}
+
+func (s *myString) UnmarshalAny(v reflect.Value) error {
+	*s = "unmarshaled"
+	return nil
 }
 
 type boolStruct struct {
@@ -169,7 +228,7 @@ type boolStructVisitor struct {
 func (v boolStructVisitor) VisitMap(map_ MapDecoder) error {
 	for {
 		var k string
-		ok, err := map_.NextKey(NewString(&k))
+		ok, err := map_.NextKey(&k, NewString(&k))
 		if err != nil {
 			return err
 		}
@@ -177,15 +236,16 @@ func (v boolStructVisitor) VisitMap(map_ MapDecoder) error {
 			return nil
 		}
 
+		var f any
 		var d Deserializer
 		switch k {
 		case "Field":
-			d = NewBool(&v.struct_.Field)
+			f, d = &v.struct_.Field, NewBool(&v.struct_.Field)
 		default:
-			d = SkipCodec{}
+			f, d = nil, SkipCodec{}
 		}
 
-		if err := map_.NextValue(d); err != nil {
+		if err := map_.NextValue(f, d); err != nil {
 			return err
 		}
 	}
@@ -210,22 +270,31 @@ func TestCodec(t *testing.T) {
 	var bools []bool
 	err = NewSeq[BoolCodec[bool]](&bools).Deserialize(data([]bool{true, false}))
 	require.NoError(t, err)
-	require.Equal(t, []bool{true, false}, bools)
+	assert.Equal(t, []bool{true, false}, bools)
 
 	var boolMap map[int]bool
 	err = NewMap[IntCodec[int], BoolCodec[bool]](&boolMap).Deserialize(data(map[int]bool{42: true}))
 	require.NoError(t, err)
-	require.Equal(t, map[int]bool{42: true}, boolMap)
+	assert.Equal(t, map[int]bool{42: true}, boolMap)
 
 	var struct_ boolStruct
 	err = boolStructVisitor{struct_: &struct_}.Deserialize(data(boolStruct{Field: true}))
 	require.NoError(t, err)
-	require.Equal(t, boolStruct{Field: true}, struct_)
+	assert.Equal(t, boolStruct{Field: true}, struct_)
 
 	var any_ any
 	err = NewAny(&any_).Deserialize(data(boolStruct{Field: true}))
 	require.NoError(t, err)
-	require.Equal(t, map[string]any{"Field": true}, any_)
+	assert.Equal(t, map[string]any{"Field": true}, any_)
+
+	var ms myString
+	err = NewString(&ms).Deserialize(data("hello"))
+	require.NoError(t, err)
+	assert.Equal(t, myString("hello"), ms)
+
+	var special testSpecial
+	err = NewError(&special).Deserialize(data(make(testSpecial)))
+	assert.Error(t, err)
 }
 
 func TestCodecReflect(t *testing.T) {
@@ -243,20 +312,72 @@ func TestCodecReflect(t *testing.T) {
 	var bools []bool
 	err = GetDeserializer(&bools).Deserialize(data([]bool{true, false}))
 	require.NoError(t, err)
-	require.Equal(t, []bool{true, false}, bools)
+	assert.Equal(t, []bool{true, false}, bools)
 
 	var boolMap map[int]bool
 	err = GetDeserializer(&boolMap).Deserialize(data(map[int]bool{42: true}))
 	require.NoError(t, err)
-	require.Equal(t, map[int]bool{42: true}, boolMap)
+	assert.Equal(t, map[int]bool{42: true}, boolMap)
 
 	var struct_ boolStruct
 	err = GetDeserializer(&struct_).Deserialize(data(boolStruct{Field: true}))
 	require.NoError(t, err)
-	require.Equal(t, boolStruct{Field: true}, struct_)
+	assert.Equal(t, boolStruct{Field: true}, struct_)
 
 	var any_ any
 	err = GetDeserializer(&any_).Deserialize(data(boolStruct{Field: true}))
 	require.NoError(t, err)
-	require.Equal(t, map[string]any{"Field": true}, any_)
+	assert.Equal(t, map[string]any{"Field": true}, any_)
+
+	var ms myString
+	err = GetDeserializer(&ms).Deserialize(data("hello"))
+	require.NoError(t, err)
+	assert.Equal(t, myString("hello"), ms)
+
+	var special testSpecial
+	err = GetDeserializer(&special).Deserialize(data(make(testSpecial)))
+	assert.Error(t, err)
+}
+
+func TestUnmarshal(t *testing.T) {
+	var b bool
+	err := unmarshalAny(reflect.ValueOf(true), &b)
+	require.NoError(t, err)
+	assert.Equal(t, true, b)
+
+	var bp *bool
+	err = unmarshalAny(reflect.ValueOf(true), &bp)
+	require.NoError(t, err)
+	require.NotNil(t, bp)
+	assert.Equal(t, true, *bp)
+
+	var bools []bool
+	err = unmarshalAny(reflect.ValueOf([]bool{true, false}), &bools)
+	require.NoError(t, err)
+	assert.Equal(t, []bool{true, false}, bools)
+
+	var boolMap map[int]bool
+	err = unmarshalAny(reflect.ValueOf(map[int]bool{42: true}), &boolMap)
+	require.NoError(t, err)
+	assert.Equal(t, map[int]bool{42: true}, boolMap)
+
+	var struct_ boolStruct
+	err = unmarshalAny(reflect.ValueOf(boolStruct{Field: true}), &struct_)
+	require.NoError(t, err)
+	assert.Equal(t, boolStruct{Field: true}, struct_)
+
+	var any_ any
+	err = unmarshalAny(reflect.ValueOf(boolStruct{Field: true}), &any_)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"Field": true}, any_)
+
+	var ms myString
+	err = unmarshalAny(reflect.ValueOf("hello"), &ms)
+	require.NoError(t, err)
+	assert.Equal(t, myString("unmarshaled"), ms)
+
+	var special testSpecial
+	err = unmarshalAny(reflect.ValueOf(make(testSpecial)), &special)
+	require.NoError(t, err)
+	assert.NotNil(t, special)
 }

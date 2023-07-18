@@ -1,6 +1,7 @@
 package json
 
 import (
+	"encoding"
 	"math"
 	"reflect"
 	"strconv"
@@ -15,6 +16,15 @@ const hex = "0123456789abcdef"
 type Encoder struct {
 	enc encoder
 	out []byte
+}
+
+func (e *Encoder) encode(v any, s codec.Serializer) (err error) {
+	codec := getCodec(v)
+	if codec.encode != nil {
+		e.out, err = codec.encode(e.enc, e.out, v)
+		return
+	}
+	return s.Serialize(e)
 }
 
 func (e *Encoder) EncodeNil() (err error) {
@@ -92,13 +102,9 @@ func (e *Encoder) EncodeFloat64(v float64) (err error) {
 	return
 }
 
-var complex64Type = reflect.TypeOf((*complex64)(nil)).Elem()
-
 func (e *Encoder) EncodeComplex64(v complex64) error {
 	return &UnsupportedTypeError{Type: complex64Type}
 }
-
-var complex128Type = reflect.TypeOf((*complex64)(nil)).Elem()
 
 func (e *Encoder) EncodeComplex128(v complex128) error {
 	return &UnsupportedTypeError{Type: complex128Type}
@@ -112,6 +118,10 @@ func (e *Encoder) EncodeString(v string) (err error) {
 func (e *Encoder) EncodeBytes(v []byte) (err error) {
 	e.out, err = e.enc.encodeBytes(e.out, v)
 	return
+}
+
+func (e *Encoder) EncodeElem(v any, s codec.Serializer) error {
+	return e.encode(v, s)
 }
 
 func (e *Encoder) EncodeSeq(count int) (codec.SeqEncoder, error) {
@@ -139,13 +149,13 @@ func (e *SeqEncoder) Close() error {
 	return nil
 }
 
-func (e *SeqEncoder) EncodeElement(v codec.Serializer) error {
+func (e *SeqEncoder) EncodeElement(v any, s codec.Serializer) error {
 	if !e.first {
 		e.enc.out = append(e.enc.out, ',')
 	} else {
 		e.first = false
 	}
-	return v.Serialize(e.enc)
+	return e.enc.encode(v, s)
 }
 
 type MapEncoder struct {
@@ -158,18 +168,18 @@ func (e *MapEncoder) Close() error {
 	return nil
 }
 
-func (e *MapEncoder) EncodeKey(v codec.Serializer) error {
+func (e *MapEncoder) EncodeKey(k any, s codec.Serializer) error {
 	if !e.first {
 		e.enc.out = append(e.enc.out, ',')
 	} else {
 		e.first = false
 	}
-	return v.Serialize(e.enc)
+	return mapKeyEncoder{enc: e.enc}.encode(k, s)
 }
 
-func (e *MapEncoder) EncodeValue(v codec.Serializer) error {
+func (e *MapEncoder) EncodeValue(v any, s codec.Serializer) error {
 	e.enc.out = append(e.enc.out, ':')
-	return v.Serialize(e.enc)
+	return e.enc.encode(v, s)
 }
 
 type StructEncoder struct {
@@ -182,7 +192,7 @@ func (e *StructEncoder) Close() error {
 	return nil
 }
 
-func (e *StructEncoder) EncodeField(key string, v codec.Serializer) error {
+func (e *StructEncoder) EncodeField(key string, v any, s codec.Serializer) error {
 	if !e.first {
 		e.enc.out = append(e.enc.out, ',')
 	} else {
@@ -193,7 +203,7 @@ func (e *StructEncoder) EncodeField(key string, v codec.Serializer) error {
 		return err
 	}
 	e.enc.out = append(e.enc.out, ':')
-	return v.Serialize(e.enc)
+	return e.enc.encode(v, s)
 }
 
 func (e encoder) encodeNull(b []byte) ([]byte, error) {
@@ -425,4 +435,46 @@ func (e encoder) encodeBytes(b, v []byte) ([]byte, error) {
 	base64.StdEncoding.Encode(b[i+1:j-1], v)
 	b[j-1] = '"'
 	return b, nil
+}
+
+func (e encoder) encodeJSONMarshaler(b []byte, v any) ([]byte, error) {
+	t := reflect.TypeOf(v)
+	switch t.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if reflect.ValueOf(v).IsNil() {
+			return append(b, "null"...), nil
+		}
+	}
+
+	j, err := v.(Marshaler).MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+
+	d := decoder{}
+	s, _, _, err := d.parseValue(j)
+	if err != nil {
+		return b, &MarshalerError{Type: t, Err: err}
+	}
+
+	// TODO: escape HTML
+
+	return append(b, s...), nil
+}
+
+func (e encoder) encodeTextMarshaler(b []byte, v any) ([]byte, error) {
+	t := reflect.TypeOf(v)
+	switch t.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if reflect.ValueOf(v).IsNil() {
+			return append(b, "null"...), nil
+		}
+	}
+
+	s, err := v.(encoding.TextMarshaler).MarshalText()
+	if err != nil {
+		return nil, err
+	}
+
+	return e.encodeString(b, string(s))
 }

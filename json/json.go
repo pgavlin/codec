@@ -177,21 +177,21 @@ func (k Kind) Class() Kind { return Kind(1 << uint(bits.Len(uint(k))-1)) }
 
 // Append acts like Marshal but appends the json representation to b instead of
 // always reallocating a new slice.
-func Append(b []byte, ser codec.Serializer, flags AppendFlags) ([]byte, error) {
+func Append(b []byte, x any, s codec.Serializer, flags AppendFlags) ([]byte, error) {
 	e := Encoder{
 		enc: encoder{flags: flags},
 		out: b,
 	}
-	err := ser.Serialize(&e)
+	err := e.encode(x, s)
 	return e.out, err
 }
 
 // Marshal is documented at https://golang.org/pkg/encoding/json/#Marshal
-func Marshal(x interface{}) ([]byte, error) {
+func Marshal(x any) ([]byte, error) {
 	var err error
 	var buf = encoderBufferPool.Get().(*encoderBuffer)
 
-	if buf.data, err = Append(buf.data[:0], codec.GetSerializer(x), EscapeHTML|SortMapKeys); err != nil {
+	if buf.data, err = Append(buf.data[:0], x, codec.GetSerializer(x), EscapeHTML|SortMapKeys); err != nil {
 		return nil, err
 	}
 
@@ -202,8 +202,8 @@ func Marshal(x interface{}) ([]byte, error) {
 }
 
 // Unmarshal is documented at https://golang.org/pkg/encoding/json/#Unmarshal
-func Unmarshal(b []byte, x interface{}) error {
-	r, err := Parse(b, codec.GetDeserializer(x), 0)
+func Unmarshal(b []byte, x any) error {
+	r, err := Parse(b, x, codec.GetDeserializer(x), 0)
 	if len(r) != 0 {
 		if _, ok := err.(*SyntaxError); !ok {
 			// The encoding/json package prioritizes reporting errors caused by
@@ -217,10 +217,10 @@ func Unmarshal(b []byte, x interface{}) error {
 
 // Parse behaves like Unmarshal but the caller can pass a set of flags to
 // configure the parsing behavior.
-func Parse(b []byte, de codec.Deserializer, flags ParseFlags) ([]byte, error) {
+func Parse(b []byte, x any, ds codec.Deserializer, flags ParseFlags) ([]byte, error) {
 	b = skipSpaces(b)
 	d := &Decoder{rest: b, flags: flags | internalParseFlags(b)}
-	err := de.Deserialize(d)
+	err := d.decode(x, ds)
 	return d.rest, err
 }
 

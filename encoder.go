@@ -21,7 +21,7 @@ type Encoder interface {
 	EncodeComplex64(v complex64) error
 	EncodeComplex128(v complex128) error
 	EncodeString(v string) error
-	EncodeBytes(b []byte) error
+	EncodeBytes(v []byte) error
 	EncodeSeq(len int) (SeqEncoder, error)
 	EncodeMap(len int) (MapEncoder, error)
 	EncodeStruct(name string) (StructEncoder, error)
@@ -30,20 +30,20 @@ type Encoder interface {
 type SeqEncoder interface {
 	io.Closer
 
-	EncodeElement(v Serializer) error
+	EncodeElement(s Serializer) error
 }
 
 type MapEncoder interface {
 	io.Closer
 
-	EncodeKey(v Serializer) error
-	EncodeValue(v Serializer) error
+	EncodeKey(s Serializer) error
+	EncodeValue(s Serializer) error
 }
 
 type StructEncoder interface {
 	io.Closer
 
-	EncodeField(key string, v Serializer) error
+	EncodeField(key string, s Serializer) error
 }
 
 type Serializer interface {

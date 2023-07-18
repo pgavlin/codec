@@ -1,11 +1,14 @@
 package json
 
 import (
+	"encoding"
 	"fmt"
 	"reflect"
 	"strconv"
 	"time"
 	"unsafe"
+
+	"github.com/pgavlin/codec/typecache"
 )
 
 const (
@@ -28,7 +31,48 @@ type encoder struct {
 
 type decoder struct {
 	flags ParseFlags
-	rest  []byte
+}
+
+type jsonCodec struct {
+	encode func(e encoder, b []byte, v any) ([]byte, error)
+	decode func(d decoder, b []byte, v any) ([]byte, error)
+}
+
+var codecs typecache.Cache[jsonCodec]
+
+func getCodec(v any) jsonCodec {
+	return codecs.GetOrCreate(reflect.TypeOf(v), func(t reflect.Type) jsonCodec {
+		if t == nil {
+			return jsonCodec{}
+		}
+
+		// TOOD:
+		// - json.Number
+		// - json.RawMessage
+
+		// TODO: pointer cases?
+
+		var c jsonCodec
+		switch {
+		case t.Implements(jsonMarshalerType):
+			c.encode = encoder.encodeJSONMarshaler
+		case t.Implements(textMarshalerType):
+			c.encode = encoder.encodeTextMarshaler
+		}
+
+		p := t
+		if p.Kind() != reflect.Pointer {
+			p = reflect.PtrTo(t)
+		}
+		switch {
+		case p.Implements(jsonUnmarshalerType):
+			c.decode = decoder.decodeJSONUnmarshaler
+		case p.Implements(textUnmarshalerType):
+			c.decode = decoder.decodeTextUnmarshaler
+		}
+
+		return c
+	})
 }
 
 func unmarshalTypeError(b []byte, t reflect.Type) error {
@@ -97,6 +141,42 @@ type sliceHeader struct {
 	Len  int
 	Cap  int
 }
+
+var (
+	nilType  = reflect.TypeOf(nil)
+	boolType = reflect.TypeOf((*bool)(nil)).Elem()
+
+	intType   = reflect.TypeOf(int(0))
+	int8Type  = reflect.TypeOf(int8(0))
+	int16Type = reflect.TypeOf(int16(0))
+	int32Type = reflect.TypeOf(int32(0))
+	int64Type = reflect.TypeOf(int64(0))
+
+	uintType    = reflect.TypeOf(uint(0))
+	uint8Type   = reflect.TypeOf(uint8(0))
+	uint16Type  = reflect.TypeOf(uint16(0))
+	uint32Type  = reflect.TypeOf(uint32(0))
+	uint64Type  = reflect.TypeOf(uint64(0))
+	uintptrType = reflect.TypeOf(uintptr(0))
+
+	float32Type    = reflect.TypeOf((*float32)(nil)).Elem()
+	float64Type    = reflect.TypeOf((*float64)(nil)).Elem()
+	complex64Type  = reflect.TypeOf((*complex64)(nil)).Elem()
+	complex128Type = reflect.TypeOf((*complex64)(nil)).Elem()
+
+	ptrType    = reflect.TypeOf((*any)(nil))
+	sliceType  = reflect.TypeOf((*[]any)(nil)).Elem()
+	mapType    = reflect.TypeOf((*map[string]any)(nil)).Elem()
+	structType = reflect.TypeOf((*struct{})(nil)).Elem()
+
+	bytesType  = reflect.TypeOf((*[]byte)(nil)).Elem()
+	numberType = reflect.TypeOf((*Number)(nil)).Elem()
+
+	jsonMarshalerType   = reflect.TypeOf((*Marshaler)(nil)).Elem()
+	jsonUnmarshalerType = reflect.TypeOf((*Unmarshaler)(nil)).Elem()
+	textMarshalerType   = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+	textUnmarshalerType = reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
+)
 
 // =============================================================================
 // Copyright 2009 The Go Authors. All rights reserved.

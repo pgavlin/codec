@@ -114,6 +114,10 @@ func (e *Encoder) EncodeBytes(b []byte) error {
 	return nil
 }
 
+func (e *Encoder) EncodeElem(_ any, s codec.Serializer) error {
+	return s.Serialize(e)
+}
+
 func (e *Encoder) EncodeSeq(len int) (codec.SeqEncoder, error) {
 	var vs []any
 	if len != 0 {
@@ -150,7 +154,7 @@ func (e *SeqEncoder) Close() error {
 	return nil
 }
 
-func (e *SeqEncoder) EncodeElement(ser codec.Serializer) error {
+func (e *SeqEncoder) EncodeElement(_ any, ser codec.Serializer) error {
 	var v any
 	if err := ser.Serialize(NewEncoder(&v)); err != nil {
 		return err
@@ -174,11 +178,11 @@ func (e *MapEncoder) Close() error {
 	return nil
 }
 
-func (e *MapEncoder) EncodeKey(ser codec.Serializer) error {
+func (e *MapEncoder) EncodeKey(_ any, ser codec.Serializer) error {
 	return ser.Serialize(mapKeyEncoder{key: &e.key})
 }
 
-func (e *MapEncoder) EncodeValue(ser codec.Serializer) error {
+func (e *MapEncoder) EncodeValue(_ any, ser codec.Serializer) error {
 	var v any
 	if err := ser.Serialize(NewEncoder(&v)); err != nil {
 		return err
@@ -197,7 +201,7 @@ func (e *StructEncoder) Close() error {
 	return nil
 }
 
-func (e *StructEncoder) EncodeField(key string, ser codec.Serializer) error {
+func (e *StructEncoder) EncodeField(key string, _ any, ser codec.Serializer) error {
 	var v any
 	if err := ser.Serialize(NewEncoder(&v)); err != nil {
 		return err
@@ -236,7 +240,10 @@ func (e mapKeyEncoder) EncodeComplex64(v complex64) error {
 func (e mapKeyEncoder) EncodeComplex128(v complex128) error {
 	return errors.New("map key must be a string")
 }
-func (e mapKeyEncoder) EncodeBytes(b []byte) error { return errors.New("map key must be a string") }
+func (e mapKeyEncoder) EncodeBytes(v []byte) error { return errors.New("map key must be a string") }
+func (e mapKeyEncoder) EncodeElem(v any, s codec.Serializer) error {
+	return errors.New("map key must be a string")
+}
 func (e mapKeyEncoder) EncodeSeq(len int) (codec.SeqEncoder, error) {
 	return nil, errors.New("map key must be a string")
 }
@@ -245,4 +252,7 @@ func (e mapKeyEncoder) EncodeMap(len int) (codec.MapEncoder, error) {
 }
 func (e mapKeyEncoder) EncodeStruct(name string) (codec.StructEncoder, error) {
 	return nil, errors.New("map key must be a string")
+}
+func (e mapKeyEncoder) EncodeAny(v any) (bool, error) {
+	return false, nil
 }

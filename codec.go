@@ -5,42 +5,53 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"unicode"
 	"unsafe"
 
+	"github.com/pgavlin/codec/typecache"
 	"github.com/segmentio/asm/keyset"
 )
 
-func GetDeserializer(v any) Deserializer {
+func GetDeserializer(v any, format Format) Deserializer {
 	if d, ok := v.(Deserializer); ok {
 		return d
 	}
-
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer {
 		return unsupportedTypeCodec{t: rv.Type()}
 	}
-	return getCodec(rv.Type().Elem()).new(rv.UnsafePointer())
+	return getCodec(rv.Type().Elem(), format).new(rv.UnsafePointer())
 }
 
-func GetSerializer(v any) Serializer {
+func GetSerializer(v any, format Format) Serializer {
 	if s, ok := v.(Serializer); ok {
 		return s
 	}
 	if v == nil {
 		return NilCodec{}
 	}
-	return getCodec(reflect.TypeOf(v)).new((*iface)(unsafe.Pointer(&v)).ptr)
+	return getCodec(reflect.TypeOf(v), format).new((*iface)(unsafe.Pointer(&v)).ptr)
 }
 
-func getCodec(t reflect.Type) codec {
-	cache := cacheLoad()
-	c, found := cache[typeid(t)]
-	if !found {
-		c = constructCachedCodec(t, cache)
-	}
-	return c
+type format struct {
+	codecs typecache.Cache[codec]
+}
+
+var codecs typecache.Cache[codec]
+
+func getCodec(t reflect.Type, format Format) codec {
+	return codecs.GetOrCreate(t, func(t reflect.Type) codec {
+		// TODO: inlined...?
+		//	if inlined(t) {
+		//		c.encode = constructInlineValueEncodeFunc(c.encode)
+		//	}
+		return constructCodec(t, map[reflect.Type]*structType{}, t.Kind() == reflect.Ptr)
+	})
+}
+
+func IsAny[T any]() bool {
+	var v T
+	return reflect.TypeOf(v) == anyType
 }
 
 const (
@@ -65,143 +76,97 @@ type decoder struct{}
 type emptyFunc func(unsafe.Pointer) bool
 type sortFunc func([]reflect.Value)
 
-var (
-	// Eventually consistent cache mapping go types to dynamically generated
-	// codecs.
-	//
-	// Note: using a uintptr as key instead of reflect.Type shaved ~15ns off of
-	// the ~30ns Marhsal/Unmarshal functions which were dominated by the map
-	// lookup time for simple types like bool, int, etc..
-	cache unsafe.Pointer // map[unsafe.Pointer]codec
-)
-
-func cacheLoad() map[unsafe.Pointer]codec {
-	p := atomic.LoadPointer(&cache)
-	return *(*map[unsafe.Pointer]codec)(unsafe.Pointer(&p))
-}
-
-func cacheStore(typ reflect.Type, cod codec, oldCodecs map[unsafe.Pointer]codec) {
-	newCodecs := make(map[unsafe.Pointer]codec, len(oldCodecs)+1)
-	newCodecs[typeid(typ)] = cod
-
-	for t, c := range oldCodecs {
-		newCodecs[t] = c
+func constructCodec(t reflect.Type, seen map[reflect.Type]*structType, canAddr bool) (c codec) {
+	switch t {
+	case nullType:
+		return nilCodec{}
+	case boolType:
+		return boolCodec{}
+	case intType:
+		return intCodec{}
+	case int8Type:
+		return int8Codec{}
+	case int16Type:
+		return int16Codec{}
+	case int32Type:
+		return int32Codec{}
+	case int64Type:
+		return int64Codec{}
+	case uintType:
+		return uintCodec{}
+	case uint8Type:
+		return uint8Codec{}
+	case uint16Type:
+		return uint16Codec{}
+	case uint32Type:
+		return uint32Codec{}
+	case uint64Type:
+		return uint64Codec{}
+	case uintptrType:
+		return uintptrCodec{}
+	case float32Type:
+		return float32Codec{}
+	case float64Type:
+		return float64Codec{}
+	case stringType:
+		return stringCodec{}
+	case bytesType:
+		return bytesCodec{}
 	}
 
-	atomic.StorePointer(&cache, *(*unsafe.Pointer)(unsafe.Pointer(&newCodecs)))
-}
-
-func typeid(t reflect.Type) unsafe.Pointer {
-	return (*iface)(unsafe.Pointer(&t)).ptr
-}
-
-func constructCachedCodec(t reflect.Type, cache map[unsafe.Pointer]codec) codec {
-	c := constructCodec(t, map[reflect.Type]*structType{}, t.Kind() == reflect.Ptr)
-
-	// TODO: inlined...?
-	//	if inlined(t) {
-	//		c.encode = constructInlineValueEncodeFunc(c.encode)
-	//	}
-
-	cacheStore(t, c, cache)
-	return c
-}
-
-func constructCodec(t reflect.Type, seen map[reflect.Type]*structType, canAddr bool) (c codec) {
 	switch t.Kind() {
 	case reflect.Bool:
 		c = boolCodec{}
-
 	case reflect.Int:
 		c = intCodec{}
-
 	case reflect.Int8:
 		c = int8Codec{}
-
 	case reflect.Int16:
 		c = int16Codec{}
-
 	case reflect.Int32:
 		c = int32Codec{}
-
 	case reflect.Int64:
 		c = int64Codec{}
-
 	case reflect.Uint:
 		c = uintCodec{}
-
 	case reflect.Uintptr:
 		c = uintptrCodec{}
-
 	case reflect.Uint8:
 		c = uint8Codec{}
-
 	case reflect.Uint16:
 		c = uint16Codec{}
-
 	case reflect.Uint32:
 		c = uint32Codec{}
-
 	case reflect.Uint64:
 		c = uint64Codec{}
-
 	case reflect.Float32:
 		c = float32Codec{}
-
 	case reflect.Float64:
 		c = float64Codec{}
-
 	case reflect.String:
 		c = stringCodec{}
-
 	case reflect.Interface:
 		c = AnyCodec{}
-
 	case reflect.Array:
 		c = constructArrayCodec(t, seen, canAddr)
-
 	case reflect.Slice:
 		c = constructSliceCodec(t, seen)
-
 	case reflect.Map:
 		c = constructMapCodec(t, seen)
-
 	case reflect.Struct:
 		c = constructStructCodec(t, seen, canAddr)
-
 	case reflect.Ptr:
 		c = constructPointerCodec(t, seen)
-
 	default:
 		c = constructUnsupportedTypeCodec(t)
 	}
 
-	// TODO: serializer, deserializer
-
-	// p := reflect.PtrTo(t)
-
-	//	if canAddr {
-	//		switch {
-	//		case p.Implements(jsonMarshalerType):
-	//			c.encode = constructJSONMarshalerEncodeFunc(t, true)
-	//		case p.Implements(textMarshalerType):
-	//			c.encode = constructTextMarshalerEncodeFunc(t, true)
-	//		}
-	//	}
-	//
-	//	switch {
-	//	case t.Implements(jsonMarshalerType):
-	//		c.encode = constructJSONMarshalerEncodeFunc(t, false)
-	//	case t.Implements(textMarshalerType):
-	//		c.encode = constructTextMarshalerEncodeFunc(t, false)
-	//	}
-	//
-	//	switch {
-	//	case p.Implements(jsonUnmarshalerType):
-	//		c.decode = constructJSONUnmarshalerDecodeFunc(t, true)
-	//	case p.Implements(textUnmarshalerType):
-	//		c.decode = constructTextUnmarshalerDecodeFunc(t, true)
-	//	}
+	if t.Implements(codecSerializerType) {
+		c = constructSerializerCodec(t, c)
+	}
+	if reflect.PtrTo(t).Implements(codecDeserializerType) {
+		c = constructDeserializerCodec(t, c)
+	}
 
 	return
 }
@@ -222,54 +187,12 @@ func constructArrayCodec(t reflect.Type, seen map[reflect.Type]*structType, canA
 func constructSliceCodec(t reflect.Type, seen map[reflect.Type]*structType) codec {
 	e := t.Elem()
 	s := alignedSize(e)
-
-	// TODO: Serializer, Deserializer for []byte
-	//
-	//	if e.Kind() == reflect.Uint8 {
-	//		// Go 1.7+ behavior: slices of byte types (and aliases) may override the
-	//		// default encoding and decoding behaviors by implementing marshaler and
-	//		// unmarshaler interfaces.
-	//		p := reflect.PtrTo(e)
-	//		c := codec{}
-	//
-	//		switch {
-	//		case e.Implements(jsonMarshalerType):
-	//			c.encode = constructJSONMarshalerEncodeFunc(e, false)
-	//		case e.Implements(textMarshalerType):
-	//			c.encode = constructTextMarshalerEncodeFunc(e, false)
-	//		case p.Implements(jsonMarshalerType):
-	//			c.encode = constructJSONMarshalerEncodeFunc(e, true)
-	//		case p.Implements(textMarshalerType):
-	//			c.encode = constructTextMarshalerEncodeFunc(e, true)
-	//		}
-	//
-	//		switch {
-	//		case e.Implements(jsonUnmarshalerType):
-	//			c.decode = constructJSONUnmarshalerDecodeFunc(e, false)
-	//		case e.Implements(textUnmarshalerType):
-	//			c.decode = constructTextUnmarshalerDecodeFunc(e, false)
-	//		case p.Implements(jsonUnmarshalerType):
-	//			c.decode = constructJSONUnmarshalerDecodeFunc(e, true)
-	//		case p.Implements(textUnmarshalerType):
-	//			c.decode = constructTextUnmarshalerDecodeFunc(e, true)
-	//		}
-	//
-	//		if c.encode != nil {
-	//			c.encode = constructSliceEncodeFunc(s, t, c.encode)
-	//		} else {
-	//			c.encode = encoder.encodeBytes
-	//		}
-	//
-	//		if c.decode != nil {
-	//			c.decode = constructSliceDecodeFunc(s, t, c.decode)
-	//		} else {
-	//			c.decode = decoder.decodeBytes
-	//		}
-	//
-	//		return c
-	//	}
-
 	c := constructCodec(e, seen, true)
+
+	if e == uint8Type {
+		return bytesCodec{}
+	}
+
 	return sliceCodec{
 		sliceType: &sliceType{
 			size: s,
@@ -552,6 +475,20 @@ func constructUnsupportedTypeCodec(t reflect.Type) codec {
 	return unsupportedTypeCodec{t: t}
 }
 
+func constructSerializerCodec(t reflect.Type, next codec) codec {
+	return serializerCodec{
+		t:    t,
+		next: next,
+	}
+}
+
+func constructDeserializerCodec(t reflect.Type, next codec) codec {
+	return deserializerCodec{
+		t:    t,
+		next: next,
+	}
+}
+
 // noescape hides a pointer from escape analysis.  noescape is
 // the identity function but escape analysis doesn't think the
 // output depends on the input. noescape is inlined and currently
@@ -745,11 +682,10 @@ var (
 	float32Type = reflect.TypeOf(float32(0))
 	float64Type = reflect.TypeOf(float64(0))
 
-	stringType  = reflect.TypeOf("")
-	stringsType = reflect.TypeOf([]string(nil))
-	bytesType   = reflect.TypeOf(([]byte)(nil))
+	stringType = reflect.TypeOf("")
+	bytesType  = reflect.TypeOf(([]byte)(nil))
 
-	interfaceType         = reflect.TypeOf((*interface{})(nil)).Elem()
+	anyType               = reflect.TypeOf((*any)(nil)).Elem()
 	codecSerializerType   = reflect.TypeOf((*Serializer)(nil)).Elem()
 	codecDeserializerType = reflect.TypeOf((*Deserializer)(nil)).Elem()
 )

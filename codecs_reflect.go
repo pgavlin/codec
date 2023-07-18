@@ -96,6 +96,14 @@ func (unsafeCodec) VisitString(v string) error {
 	return errors.New("unexpected string")
 }
 
+func (unsafeCodec) VisitBytes(v []byte) error {
+	return errors.New("unexpected bytes")
+}
+
+func (unsafeCodec) VisitElem(d ElemDecoder) error {
+	return errors.New("unexpected elem")
+}
+
 func (unsafeCodec) VisitSeq(d SeqDecoder) error {
 	return errors.New("unexpected sequence")
 }
@@ -447,6 +455,25 @@ func (c stringCodec) Serialize(e Encoder) error {
 	return e.EncodeString(*(*string)(c.value))
 }
 
+type bytesCodec struct{ unsafeCodec }
+
+func (c bytesCodec) new(v unsafe.Pointer) codec {
+	return bytesCodec{unsafeCodec: unsafeCodec{value: v}}
+}
+
+func (c bytesCodec) VisitBytes(v []byte) error {
+	*(*[]byte)(c.value) = v
+	return nil
+}
+
+func (c bytesCodec) Deserialize(d Decoder) error {
+	return d.DecodeBytes(c)
+}
+
+func (c bytesCodec) Serialize(e Encoder) error {
+	return e.EncodeBytes(*(*[]byte)(c.value))
+}
+
 type ptrType struct {
 	t    reflect.Type
 	elem codec
@@ -469,179 +496,18 @@ func (c ptrCodec) VisitNil() error {
 	return nil
 }
 
-func (c ptrCodec) VisitBool(dv bool) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitBool(dv); err != nil {
+func (c ptrCodec) VisitElem(d ElemDecoder) error {
+	v := reflect.New(c.t.Elem())
+	p := v.UnsafePointer()
+	if err := d.Element(v.Interface(), c.elem.new(p)); err != nil {
 		return err
 	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitInt(dv int) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitInt(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitInt8(dv int8) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitInt8(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitInt16(dv int16) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitInt16(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitInt32(dv int32) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitInt32(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitInt64(dv int64) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitInt64(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitUint(dv uint) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitUint(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitUint8(dv uint8) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitUint8(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitUint16(dv uint16) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitUint16(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitUint32(dv uint32) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitUint32(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitUint64(dv uint64) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitUint64(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitUintptr(dv uintptr) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitUintptr(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitFloat32(dv float32) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitFloat32(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitFloat64(dv float64) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitFloat64(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitComplex64(dv complex64) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitComplex64(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitComplex128(dv complex128) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitComplex128(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitString(dv string) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitString(dv); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitSeq(d SeqDecoder) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitSeq(d); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
-	return nil
-}
-
-func (c ptrCodec) VisitMap(d MapDecoder) error {
-	v := reflect.New(c.t.Elem()).UnsafePointer()
-	if err := c.elem.new(v).VisitMap(d); err != nil {
-		return err
-	}
-	*(*unsafe.Pointer)(c.value) = v
+	*(*unsafe.Pointer)(c.value) = p
 	return nil
 }
 
 func (c ptrCodec) Deserialize(d Decoder) error {
-	return d.DecodeOption(c)
+	return d.DecodePtr(c)
 }
 
 func (c ptrCodec) Serialize(e Encoder) error {
@@ -672,7 +538,8 @@ func (c arrayCodec) new(v unsafe.Pointer) codec {
 func (c arrayCodec) VisitSeq(seq SeqDecoder) error {
 	vals := reflect.NewAt(c.t, c.value)
 	for i := 0; i < c.n; i++ {
-		ok, err := seq.NextElement(c.elem.new(vals.Index(i).Addr().UnsafePointer()))
+		elem := vals.Index(i).Addr()
+		ok, err := seq.NextElement(elem.Interface(), c.elem.new(elem.UnsafePointer()))
 		if err != nil {
 			return err
 		}
@@ -681,9 +548,10 @@ func (c arrayCodec) VisitSeq(seq SeqDecoder) error {
 		}
 	}
 
-	discard := c.elem.new(reflect.New(c.t.Elem()).UnsafePointer())
+	discard := reflect.New(c.t.Elem())
+	discardCodec := c.elem.new(discard.UnsafePointer())
 	for {
-		ok, err := seq.NextElement(discard)
+		ok, err := seq.NextElement(discard.Interface(), discardCodec)
 		if err != nil {
 			return err
 		}
@@ -705,7 +573,8 @@ func (c arrayCodec) Serialize(e Encoder) error {
 		return err
 	}
 	for i, n := 0, vals.Len(); i < n; i++ {
-		if err := enc.EncodeElement(c.elem.new(vals.Index(i).Addr().UnsafePointer())); err != nil {
+		elem := vals.Index(i)
+		if err := enc.EncodeElement(elem, c.elem.new(elem.Addr().UnsafePointer())); err != nil {
 			return err
 		}
 	}
@@ -743,7 +612,10 @@ func (c sliceCodec) VisitSeq(seq SeqDecoder) error {
 			*s = extendSlice(c.t, s, cap)
 		}
 
-		ok, err := seq.NextElement(c.elem.new(unsafe.Pointer(uintptr(s.data) + (uintptr(s.len) * c.size))))
+		p := unsafe.Pointer(uintptr(s.data) + (uintptr(s.len) * c.size))
+		elem := reflect.NewAt(c.t.Elem(), p)
+
+		ok, err := seq.NextElement(elem.Interface(), c.elem.new(p))
 		if err != nil {
 			return err
 		}
@@ -766,7 +638,8 @@ func (c sliceCodec) Serialize(e Encoder) error {
 		return err
 	}
 	for i, n, data := 0, s.len, s.data; i < n; i, data = i+1, unsafe.Pointer(uintptr(data)+c.size) {
-		if err := enc.EncodeElement(c.elem.new(unsafe.Pointer(data))); err != nil {
+		elem := reflect.NewAt(c.t.Elem(), data).Elem()
+		if err := enc.EncodeElement(elem.Interface(), c.elem.new(unsafe.Pointer(data))); err != nil {
 			return err
 		}
 	}
@@ -812,7 +685,7 @@ func (c mapCodec) VisitMap(map_ MapDecoder) error {
 		k.Set(c.kz)
 		v.Set(c.vz)
 
-		ok, err := map_.NextKey(c.kc.new(kptr))
+		ok, err := map_.NextKey(k.Interface(), c.kc.new(kptr))
 		if err != nil {
 			return err
 		}
@@ -821,7 +694,7 @@ func (c mapCodec) VisitMap(map_ MapDecoder) error {
 			return nil
 		}
 
-		if err = map_.NextValue(c.vc.new(vptr)); err != nil {
+		if err = map_.NextValue(v.Interface(), c.vc.new(vptr)); err != nil {
 			return err
 		}
 		m.SetMapIndex(k, v)
@@ -844,11 +717,11 @@ func (c mapCodec) Serialize(e Encoder) error {
 		return err
 	}
 	for _, k := range keys {
-		if err := enc.EncodeKey(c.kc.new((*iface)(unsafe.Pointer(&k)).ptr)); err != nil {
+		if err := enc.EncodeKey(k.Interface(), c.kc.new((*iface)(unsafe.Pointer(&k)).ptr)); err != nil {
 			return err
 		}
 		v := m.MapIndex(k)
-		if err := enc.EncodeValue(c.vc.new((*iface)(unsafe.Pointer(&v)).ptr)); err != nil {
+		if err := enc.EncodeValue(v.Interface(), c.vc.new((*iface)(unsafe.Pointer(&v)).ptr)); err != nil {
 			return err
 		}
 	}
@@ -899,7 +772,7 @@ func (c structCodec) VisitMap(map_ MapDecoder) error {
 	var keybuf []byte
 	for {
 		var k string
-		ok, err := map_.NextKey(NewString(&k))
+		ok, err := map_.NextKey(&k, NewString(&k))
 		if err != nil {
 			return err
 		}
@@ -922,7 +795,7 @@ func (c structCodec) VisitMap(map_ MapDecoder) error {
 
 		if f == nil {
 			// TODO: disallow unknown fields
-			if err := map_.NextValue(SkipCodec{}); err != nil {
+			if err := map_.NextValue(nil, SkipCodec{}); err != nil {
 				return err
 			}
 			continue
@@ -940,7 +813,8 @@ func (c structCodec) VisitMap(map_ MapDecoder) error {
 			}
 		}
 
-		if err := map_.NextValue(f.codec.new(v)); err != nil {
+		fv := reflect.NewAt(f.typ, v)
+		if err := map_.NextValue(fv.Interface(), f.codec.new(v)); err != nil {
 			return err
 		}
 	}
@@ -972,7 +846,8 @@ func (c structCodec) Serialize(e Encoder) error {
 			v = unsafe.Pointer(uintptr(p) + f.embedded.offset)
 		}
 
-		if err := enc.EncodeField(f.name, f.codec.new(v)); err != nil {
+		fv := reflect.NewAt(f.typ, v).Elem()
+		if err := enc.EncodeField(f.name, fv.Interface(), f.codec.new(v)); err != nil {
 			return err
 		}
 	}
@@ -995,6 +870,50 @@ func (c unsupportedTypeCodec) Deserialize(d Decoder) error {
 
 func (c unsupportedTypeCodec) Serialize(e Encoder) error {
 	return &UnsupportedTypeError{Type: c.t}
+}
+
+type serializerCodec struct {
+	unsafeCodec
+	t    reflect.Type
+	next codec
+}
+
+func (c serializerCodec) new(v unsafe.Pointer) codec {
+	return serializerCodec{
+		unsafeCodec: unsafeCodec{value: v},
+		t:           c.t,
+		next:        c.next,
+	}
+}
+
+func (c serializerCodec) Deserialize(d Decoder) error {
+	return c.next.Deserialize(d)
+}
+
+func (c serializerCodec) Serialize(e Encoder) error {
+	return reflect.NewAt(c.t, c.value).Interface().(Serializer).Serialize(e)
+}
+
+type deserializerCodec struct {
+	unsafeCodec
+	t    reflect.Type
+	next codec
+}
+
+func (c deserializerCodec) new(v unsafe.Pointer) codec {
+	return deserializerCodec{
+		unsafeCodec: unsafeCodec{value: v},
+		t:           c.t,
+		next:        c.next,
+	}
+}
+
+func (c deserializerCodec) Deserialize(d Decoder) error {
+	return reflect.NewAt(c.t, c.value).Interface().(Deserializer).Deserialize(d)
+}
+
+func (c deserializerCodec) Serialize(e Encoder) error {
+	return c.next.Serialize(e)
 }
 
 func stringBytes(s string) []byte {
